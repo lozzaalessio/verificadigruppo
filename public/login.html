@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - FornitoriPezziDB</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .login-container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            color: #555;
+            margin-bottom: 8px;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        
+        input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .alert {
+            padding: 12px 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        
+        .alert-error {
+            background: #fee;
+            color: #c33;
+            border: 1px solid #fcc;
+        }
+        
+        .alert-success {
+            background: #efe;
+            color: #3c3;
+            border: 1px solid #cfc;
+        }
+        
+        .demo-credentials {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .demo-credentials h3 {
+            font-size: 13px;
+            margin-bottom: 10px;
+            color: #444;
+        }
+        
+        .demo-credentials p {
+            margin: 5px 0;
+        }
+        
+        .demo-credentials strong {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h1>FornitoriPezziDB</h1>
+        <p class="subtitle">Accedi al sistema di gestione</p>
+        
+        <div id="alert" style="display: none;"></div>
+        
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required autocomplete="username">
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required autocomplete="current-password">
+            </div>
+            
+            <button type="submit" id="loginBtn">Accedi</button>
+        </form>
+        
+        <div class="demo-credentials">
+            <h3>Credenziali di test:</h3>
+            <p><strong>Amministratore:</strong> admin / password123</p>
+            <p><strong>Fornitore Acme:</strong> acme_user / password123</p>
+            <p><strong>Fornitore WidgetCorp:</strong> widget_user / password123</p>
+            <p><strong>Fornitore Supplies:</strong> supplies_user / password123</p>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = window.location.origin;
+        
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const loginBtn = document.getElementById('loginBtn');
+            const alert = document.getElementById('alert');
+            
+            loginBtn.disabled = true;
+            loginBtn.textContent = 'Accesso in corso...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: new URLSearchParams({
+                        username: username,
+                        password: password
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showAlert('Login effettuato! Reindirizzamento...', 'success');
+                    
+                    // Salva info utente in localStorage
+                    localStorage.setItem('user', JSON.stringify(data.user));
+                    
+                    // Reindirizza in base al ruolo
+                    setTimeout(() => {
+                        if (data.user.role === 'admin') {
+                            window.location.href = 'dashboard-admin.html';
+                        } else {
+                            window.location.href = 'dashboard-fornitore.html';
+                        }
+                    }, 500);
+                } else {
+                    showAlert(data.message || 'Errore durante il login', 'error');
+                    loginBtn.disabled = false;
+                    loginBtn.textContent = 'Accedi';
+                }
+            } catch (error) {
+                showAlert('Errore di connessione al server', 'error');
+                loginBtn.disabled = false;
+                loginBtn.textContent = 'Accedi';
+            }
+        });
+        
+        function showAlert(message, type) {
+            const alert = document.getElementById('alert');
+            alert.textContent = message;
+            alert.className = `alert alert-${type}`;
+            alert.style.display = 'block';
+            
+            if (type === 'success') {
+                setTimeout(() => {
+                    alert.style.display = 'none';
+                }, 3000);
+            }
+        }
+        
+        // Verifica se già loggato
+        window.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/me`);
+                const data = await response.json();
+                
+                if (data.authenticated) {
+                    if (data.user.role === 'admin') {
+                        window.location.href = 'dashboard-admin.html';
+                    } else {
+                        window.location.href = 'dashboard-fornitore.html';
+                    }
+                }
+            } catch (error) {
+                console.log('Non autenticato');
+            }
+        });
+    </script>
+</body>
+</html>

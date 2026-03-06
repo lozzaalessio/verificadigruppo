@@ -7,6 +7,9 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use Slim\Factory\AppFactory;
 use App\Database;
 use App\Paginator;
+use App\Auth;
+use App\Middleware\AuthMiddleware;
+use App\Middleware\AdminMiddleware;
 
 require __DIR__ . '/../vendor/autoload.php';
 
@@ -341,6 +344,697 @@ $app->get('/10', function (Request $request, Response $response): Response {
         Paginator::paginate($rows, $request)
     ));
 });
+
+/* ===============================================================
+   NUOVE API - AUTENTICAZIONE E GESTIONE
+   =============================================================== */
+
+/* ---------------------------------------------------------------
+   POST /api/auth/login - Login utente
+--------------------------------------------------------------- */
+$app->post('/api/auth/login', function (Request $request, Response $response): Response {
+    $body = $request->getParsedBody();
+    $username = trim($body['username'] ?? '');
+    $password = trim($body['password'] ?? '');
+    
+    if (empty($username) || empty($password)) {
+        return jsonResponse($response, [
+            'error' => 'Parametri mancanti',
+            'message' => 'Username e password sono obbligatori'
+        ], 400);
+    }
+    
+    $user = Auth::authenticate($username, $password);
+    
+    if (!$user) {
+        return jsonResponse($response, [
+            'error' => 'Credenziali non valide',
+            'message' => 'Username o password errati'
+        ], 401);
+    }
+    
+    Auth::login($user);
+    
+    // Se è un fornitore, aggiungi anche l'ID fornitore
+    if ($user['role'] === 'fornitore') {
+        $fornitoreId = Auth::getFornitoreId();
+        $user['fornitore_id'] = $fornitoreId;
+    }
+    
+    return jsonResponse($response, [
+        'message' => 'Login effettuato con successo',
+        'user' => $user
+    ]);
+});
+
+/* ---------------------------------------------------------------
+   POST /api/auth/logout - Logout utente
+--------------------------------------------------------------- */
+$app->post('/api/auth/logout', function (Request $request, Response $response): Response {
+    Auth::logout();
+    
+    return jsonResponse($response, [
+        'message' => 'Logout effettuato con successo'
+    ]);
+});
+
+/* ---------------------------------------------------------------
+   GET /api/auth/me - Info utente corrente
+--------------------------------------------------------------- */
+$app->get('/api/auth/me', function (Request $request, Response $response): Response {
+    if (!Auth::check()) {
+        return jsonResponse($response, [
+            'authenticated' => false
+        ]);
+    }
+    
+    $user = Auth::user();
+    
+    // Se è un fornitore, aggiungi anche l'ID fornitore
+    if ($user['role'] === 'fornitore') {
+        $fornitoreId = Auth::getFornitoreId();
+        $user['fornitore_id'] = $fornitoreId;
+    }
+    
+    return jsonResponse($response, [
+        'authenticated' => true,
+        'user' => $user
+    ]);
+});
+
+/* ===============================================================
+   API FORNITORI
+   =============================================================== */
+
+/* ---------------------------------------------------------------
+   GET /api/fornitori - Lista fornitori (paginata)
+--------------------------------------------------------------- */
+$app->get('/api/fornitori', function (Request $request, Response $response): Response {
+    $pdo = Database::getConnection();
+    
+    $stmt = $pdo->query(
+        "SELECT f.fid, f.fnome, f.indirizzo, f.user_id,
+                u.username, u.email,
+                COUNT(c.pid) as num_pezzi,
+                f.created_at, f.updated_at
+         FROM Fornitori f
+         LEFT JOIN Users u ON f.user_id = u.id
+         LEFT JOIN Catalogo c ON c.fid = f.fid
+         GROUP BY f.fid, f.fnome, f.indirizzo, f.user_id, 
+                  u.username, u.email, f.created_at, f.updated_at
+         ORDER BY f.fnome"
+    );
+    $rows = $stmt->fetchAll();
+    
+    return jsonResponse($response, Paginator::paginate($rows, $request));
+})->add(new AuthMiddleware());
+
+/* ---------------------------------------------------------------
+   GET /api/fornitori/{fid} - Dettagli fornitore
+--------------------------------------------------------------- */
+$app->get('/api/fornitori/{fid}', function (Request $request, Response $response, array $args): Response {
+    $pdo = Database::getConnection();
+    $fid = $args['fid'];
+    
+    $stmt = $pdo->prepare(
+        "SELECT f.fid, f.fnome, f.indirizzo, f.user_id,
+                u.username, u.email, u.role,
+                f.created_at, f.updated_at
+         FROM Fornitori f
+         LEFT JOIN Users u ON f.user_id = u.id
+         WHERE f.fid = :fid"
+    );
+    $stmt->execute(['fid' => $fid]);
+    $fornitore = $stmt->fetch();
+    
+    if (!$fornitore) {
+        return jsonResponse($response, [
+            'error' => 'Fornitore non trovato'
+        ], 404);
+    }
+    
+    // Recupera i pezzi nel catalogo
+    $stmt = $pdo->prepare(
+        "SELECT p.pid, p.pnome, p.colore, p.descrizione,
+                c.costo, c.quantita, c.note,
+                c.created_at as aggiunto_il, c.updated_at as modificato_il
+         FROM Catalogo c
+         JOIN Pezzi p ON p.pid = c.pid
+         WHERE c.fid = :fid
+         ORDER BY p.pnome"
+    );
+    $stmt->execute(['fid' => $fid]);
+    $fornitore['catalogo'] = $stmt->fetchAll();
+    
+    return jsonResponse($response, ['data' => $fornitore]);
+})->add(new AuthMiddleware());
+
+/* ---------------------------------------------------------------
+   POST /api/fornitori - Crea fornitore (solo admin)
+--------------------------------------------------------------- */
+$app->post('/api/fornitori', function (Request $request, Response $response): Response {
+    $body = $request->getParsedBody();
+    $fid = trim($body['fid'] ?? '');
+    $fnome = trim($body['fnome'] ?? '');
+    $indirizzo = trim($body['indirizzo'] ?? '');
+    $userId = !empty($body['user_id']) ? (int)$body['user_id'] : null;
+    
+    if (empty($fid) || empty($fnome)) {
+        return jsonResponse($response, [
+            'error' => 'Parametri mancanti',
+            'message' => 'fid e fnome sono obbligatori'
+        ], 400);
+    }
+    
+    $pdo = Database::getConnection();
+    
+    // Verifica se esiste già
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM Fornitori WHERE fid = :fid");
+    $stmt->execute(['fid' => $fid]);
+    if ($stmt->fetchColumn() > 0) {
+        return jsonResponse($response, [
+            'error' => 'Fornitore già esistente',
+            'message' => "Un fornitore con ID '{$fid}' esiste già"
+        ], 409);
+    }
+    
+    $stmt = $pdo->prepare(
+        "INSERT INTO Fornitori (fid, fnome, indirizzo, user_id) 
+         VALUES (:fid, :fnome, :indirizzo, :user_id)"
+    );
+    
+    $stmt->execute([
+        'fid' => $fid,
+        'fnome' => $fnome,
+        'indirizzo' => $indirizzo,
+        'user_id' => $userId
+    ]);
+    
+    return jsonResponse($response, [
+        'message' => 'Fornitore creato con successo',
+        'data' => [
+            'fid' => $fid,
+            'fnome' => $fnome,
+            'indirizzo' => $indirizzo,
+            'user_id' => $userId
+        ]
+    ], 201);
+})->add(new AdminMiddleware())->add(new AuthMiddleware());
+
+/* ---------------------------------------------------------------
+   PUT /api/fornitori/{fid} - Aggiorna fornitore (solo admin)
+--------------------------------------------------------------- */
+$app->put('/api/fornitori/{fid}', function (Request $request, Response $response, array $args): Response {
+    $pdo = Database::getConnection();
+    $fid = $args['fid'];
+    $body = $request->getParsedBody();
+    
+    // Verifica se esiste
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM Fornitori WHERE fid = :fid");
+    $stmt->execute(['fid' => $fid]);
+    if ($stmt->fetchColumn() == 0) {
+        return jsonResponse($response, [
+            'error' => 'Fornitore non trovato'
+        ], 404);
+    }
+    
+    $fnome = trim($body['fnome'] ?? '');
+    $indirizzo = trim($body['indirizzo'] ?? '');
+    $userId = isset($body['user_id']) ? (empty($body['user_id']) ? null : (int)$body['user_id']) : null;
+    
+    if (empty($fnome)) {
+        return jsonResponse($response, [
+            'error' => 'Parametri mancanti',
+            'message' => 'fnome è obbligatorio'
+        ], 400);
+    }
+    
+    $stmt = $pdo->prepare(
+        "UPDATE Fornitori 
+         SET fnome = :fnome, indirizzo = :indirizzo, user_id = :user_id
+         WHERE fid = :fid"
+    );
+    
+    $stmt->execute([
+        'fid' => $fid,
+        'fnome' => $fnome,
+        'indirizzo' => $indirizzo,
+        'user_id' => $userId
+    ]);
+    
+    return jsonResponse($response, [
+        'message' => 'Fornitore aggiornato con successo',
+        'data' => [
+            'fid' => $fid,
+            'fnome' => $fnome,
+            'indirizzo' => $indirizzo,
+            'user_id' => $userId
+        ]
+    ]);
+})->add(new AdminMiddleware())->add(new AuthMiddleware());
+
+/* ---------------------------------------------------------------
+   DELETE /api/fornitori/{fid} - Elimina fornitore (solo admin)
+--------------------------------------------------------------- */
+$app->delete('/api/fornitori/{fid}', function (Request $request, Response $response, array $args): Response {
+    $pdo = Database::getConnection();
+    $fid = $args['fid'];
+    
+    $stmt = $pdo->prepare("DELETE FROM Fornitori WHERE fid = :fid");
+    $stmt->execute(['fid' => $fid]);
+    
+    if ($stmt->rowCount() == 0) {
+        return jsonResponse($response, [
+            'error' => 'Fornitore non trovato'
+        ], 404);
+    }
+    
+    return jsonResponse($response, [
+        'message' => 'Fornitore eliminato con successo'
+    ]);
+})->add(new AdminMiddleware())->add(new AuthMiddleware());
+
+/* ===============================================================
+   API PEZZI
+   =============================================================== */
+
+/* ---------------------------------------------------------------
+   GET /api/pezzi - Lista pezzi (paginata)
+--------------------------------------------------------------- */
+$app->get('/api/pezzi', function (Request $request, Response $response): Response {
+    $pdo = Database::getConnection();
+    
+    $stmt = $pdo->query(
+        "SELECT p.pid, p.pnome, p.colore, p.descrizione,
+                COUNT(DISTINCT c.fid) as num_fornitori,
+                MIN(c.costo) as costo_minimo,
+                MAX(c.costo) as costo_massimo,
+                AVG(c.costo) as costo_medio,
+                p.created_at, p.updated_at
+         FROM Pezzi p
+         LEFT JOIN Catalogo c ON c.pid = p.pid
+         GROUP BY p.pid, p.pnome, p.colore, p.descrizione, 
+                  p.created_at, p.updated_at
+         ORDER BY p.pnome"
+    );
+    $rows = $stmt->fetchAll();
+    
+    return jsonResponse($response, Paginator::paginate($rows, $request));
+})->add(new AuthMiddleware());
+
+/* ---------------------------------------------------------------
+   GET /api/pezzi/{pid} - Dettagli pezzo
+--------------------------------------------------------------- */
+$app->get('/api/pezzi/{pid}', function (Request $request, Response $response, array $args): Response {
+    $pdo = Database::getConnection();
+    $pid = $args['pid'];
+    
+    $stmt = $pdo->prepare(
+        "SELECT p.pid, p.pnome, p.colore, p.descrizione,
+                p.created_at, p.updated_at
+         FROM Pezzi p
+         WHERE p.pid = :pid"
+    );
+    $stmt->execute(['pid' => $pid]);
+    $pezzo = $stmt->fetch();
+    
+    if (!$pezzo) {
+        return jsonResponse($response, [
+            'error' => 'Pezzo non trovato'
+        ], 404);
+    }
+    
+    // Recupera i fornitori che lo vendono
+    $stmt = $pdo->prepare(
+        "SELECT f.fid, f.fnome, f.indirizzo,
+                c.costo, c.quantita, c.note,
+                c.created_at as aggiunto_il, c.updated_at as modificato_il
+         FROM Catalogo c
+         JOIN Fornitori f ON f.fid = c.fid
+         WHERE c.pid = :pid
+         ORDER BY c.costo"
+    );
+    $stmt->execute(['pid' => $pid]);
+    $pezzo['fornitori'] = $stmt->fetchAll();
+    
+    return jsonResponse($response, ['data' => $pezzo]);
+})->add(new AuthMiddleware());
+
+/* ---------------------------------------------------------------
+   POST /api/pezzi - Crea pezzo (solo admin)
+--------------------------------------------------------------- */
+$app->post('/api/pezzi', function (Request $request, Response $response): Response {
+    $body = $request->getParsedBody();
+    $pid = trim($body['pid'] ?? '');
+    $pnome = trim($body['pnome'] ?? '');
+    $colore = trim($body['colore'] ?? '');
+    $descrizione = trim($body['descrizione'] ?? '');
+    
+    if (empty($pid) || empty($pnome) || empty($colore)) {
+        return jsonResponse($response, [
+            'error' => 'Parametri mancanti',
+            'message' => 'pid, pnome e colore sono obbligatori'
+        ], 400);
+    }
+    
+    $pdo = Database::getConnection();
+    
+    // Verifica se esiste già
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM Pezzi WHERE pid = :pid");
+    $stmt->execute(['pid' => $pid]);
+    if ($stmt->fetchColumn() > 0) {
+        return jsonResponse($response, [
+            'error' => 'Pezzo già esistente',
+            'message' => "Un pezzo con ID '{$pid}' esiste già"
+        ], 409);
+    }
+    
+    $stmt = $pdo->prepare(
+        "INSERT INTO Pezzi (pid, pnome, colore, descrizione) 
+         VALUES (:pid, :pnome, :colore, :descrizione)"
+    );
+    
+    $stmt->execute([
+        'pid' => $pid,
+        'pnome' => $pnome,
+        'colore' => $colore,
+        'descrizione' => $descrizione
+    ]);
+    
+    return jsonResponse($response, [
+        'message' => 'Pezzo creato con successo',
+        'data' => [
+            'pid' => $pid,
+            'pnome' => $pnome,
+            'colore' => $colore,
+            'descrizione' => $descrizione
+        ]
+    ], 201);
+})->add(new AdminMiddleware())->add(new AuthMiddleware());
+
+/* ---------------------------------------------------------------
+   PUT /api/pezzi/{pid} - Aggiorna pezzo (solo admin)
+--------------------------------------------------------------- */
+$app->put('/api/pezzi/{pid}', function (Request $request, Response $response, array $args): Response {
+    $pdo = Database::getConnection();
+    $pid = $args['pid'];
+    $body = $request->getParsedBody();
+    
+    // Verifica se esiste
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM Pezzi WHERE pid = :pid");
+    $stmt->execute(['pid' => $pid]);
+    if ($stmt->fetchColumn() == 0) {
+        return jsonResponse($response, [
+            'error' => 'Pezzo non trovato'
+        ], 404);
+    }
+    
+    $pnome = trim($body['pnome'] ?? '');
+    $colore = trim($body['colore'] ?? '');
+    $descrizione = trim($body['descrizione'] ?? '');
+    
+    if (empty($pnome) || empty($colore)) {
+        return jsonResponse($response, [
+            'error' => 'Parametri mancanti',
+            'message' => 'pnome e colore sono obbligatori'
+        ], 400);
+    }
+    
+    $stmt = $pdo->prepare(
+        "UPDATE Pezzi 
+         SET pnome = :pnome, colore = :colore, descrizione = :descrizione
+         WHERE pid = :pid"
+    );
+    
+    $stmt->execute([
+        'pid' => $pid,
+        'pnome' => $pnome,
+        'colore' => $colore,
+        'descrizione' => $descrizione
+    ]);
+    
+    return jsonResponse($response, [
+        'message' => 'Pezzo aggiornato con successo',
+        'data' => [
+            'pid' => $pid,
+            'pnome' => $pnome,
+            'colore' => $colore,
+            'descrizione' => $descrizione
+        ]
+    ]);
+})->add(new AdminMiddleware())->add(new AuthMiddleware());
+
+/* ---------------------------------------------------------------
+   DELETE /api/pezzi/{pid} - Elimina pezzo (solo admin)
+--------------------------------------------------------------- */
+$app->delete('/api/pezzi/{pid}', function (Request $request, Response $response, array $args): Response {
+    $pdo = Database::getConnection();
+    $pid = $args['pid'];
+    
+    $stmt = $pdo->prepare("DELETE FROM Pezzi WHERE pid = :pid");
+    $stmt->execute(['pid' => $pid]);
+    
+    if ($stmt->rowCount() == 0) {
+        return jsonResponse($response, [
+            'error' => 'Pezzo non trovato'
+        ], 404);
+    }
+    
+    return jsonResponse($response, [
+        'message' => 'Pezzo eliminato con successo'
+    ]);
+})->add(new AdminMiddleware())->add(new AuthMiddleware());
+
+/* ===============================================================
+   API CATALOGO
+   =============================================================== */
+
+/* ---------------------------------------------------------------
+   GET /api/catalogo - Lista completa catalogo (paginata)
+--------------------------------------------------------------- */
+$app->get('/api/catalogo', function (Request $request, Response $response): Response {
+    $pdo = Database::getConnection();
+    $user = Auth::user();
+    
+    // Se è un fornitore, mostra solo il suo catalogo
+    if ($user['role'] === 'fornitore') {
+        $fornitoreId = Auth::getFornitoreId();
+        if (!$fornitoreId) {
+            return jsonResponse($response, [
+                'error' => 'Fornitore non trovato',
+                'message' => 'Nessun fornitore associato a questo utente'
+            ], 404);
+        }
+        
+        $stmt = $pdo->prepare(
+            "SELECT c.fid, c.pid, c.costo, c.quantita, c.note,
+                    f.fnome, f.indirizzo,
+                    p.pnome, p.colore, p.descrizione,
+                    c.created_at, c.updated_at
+             FROM Catalogo c
+             JOIN Fornitori f ON f.fid = c.fid
+             JOIN Pezzi p ON p.pid = c.pid
+             WHERE c.fid = :fid
+             ORDER BY p.pnome"
+        );
+        $stmt->execute(['fid' => $fornitoreId]);
+    } else {
+        // Admin: mostra tutto
+        $stmt = $pdo->query(
+            "SELECT c.fid, c.pid, c.costo, c.quantita, c.note,
+                    f.fnome, f.indirizzo,
+                    p.pnome, p.colore, p.descrizione,
+                    c.created_at, c.updated_at
+             FROM Catalogo c
+             JOIN Fornitori f ON f.fid = c.fid
+             JOIN Pezzi p ON p.pid = c.pid
+             ORDER BY f.fnome, p.pnome"
+        );
+    }
+    
+    $rows = $stmt->fetchAll();
+    
+    return jsonResponse($response, Paginator::paginate($rows, $request));
+})->add(new AuthMiddleware());
+
+/* ---------------------------------------------------------------
+   POST /api/catalogo - Aggiungi pezzo al catalogo
+   Admin: può aggiungere per qualsiasi fornitore
+   Fornitore: può aggiungere solo al proprio catalogo
+--------------------------------------------------------------- */
+$app->post('/api/catalogo', function (Request $request, Response $response): Response {
+    $body = $request->getParsedBody();
+    $fid = trim($body['fid'] ?? '');
+    $pid = trim($body['pid'] ?? '');
+    $costo = floatval($body['costo'] ?? 0);
+    $quantita = intval($body['quantita'] ?? 0);
+    $note = trim($body['note'] ?? '');
+    
+    if (empty($fid) || empty($pid) || $costo <= 0) {
+        return jsonResponse($response, [
+            'error' => 'Parametri mancanti o non validi',
+            'message' => 'fid, pid e costo (> 0) sono obbligatori'
+        ], 400);
+    }
+    
+    $user = Auth::user();
+    
+    // Se è un fornitore, può aggiungere solo al proprio catalogo
+    if ($user['role'] === 'fornitore') {
+        $fornitoreId = Auth::getFornitoreId();
+        if ($fid !== $fornitoreId) {
+            return jsonResponse($response, [
+                'error' => 'Accesso negato',
+                'message' => 'Puoi gestire solo il tuo catalogo'
+            ], 403);
+        }
+    }
+    
+    $pdo = Database::getConnection();
+    
+    // Verifica se esiste già
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM Catalogo WHERE fid = :fid AND pid = :pid");
+    $stmt->execute(['fid' => $fid, 'pid' => $pid]);
+    if ($stmt->fetchColumn() > 0) {
+        return jsonResponse($response, [
+            'error' => 'Voce già esistente',
+            'message' => 'Questo pezzo è già nel catalogo del fornitore. Usa PUT per aggiornare.'
+        ], 409);
+    }
+    
+    $stmt = $pdo->prepare(
+        "INSERT INTO Catalogo (fid, pid, costo, quantita, note) 
+         VALUES (:fid, :pid, :costo, :quantita, :note)"
+    );
+    
+    $stmt->execute([
+        'fid' => $fid,
+        'pid' => $pid,
+        'costo' => $costo,
+        'quantita' => $quantita,
+        'note' => $note
+    ]);
+    
+    return jsonResponse($response, [
+        'message' => 'Pezzo aggiunto al catalogo con successo',
+        'data' => [
+            'fid' => $fid,
+            'pid' => $pid,
+            'costo' => $costo,
+            'quantita' => $quantita,
+            'note' => $note
+        ]
+    ], 201);
+})->add(new AuthMiddleware());
+
+/* ---------------------------------------------------------------
+   PUT /api/catalogo/{fid}/{pid} - Aggiorna voce catalogo
+   Admin: può aggiornare qualsiasi voce
+   Fornitore: può aggiornare solo il proprio catalogo
+--------------------------------------------------------------- */
+$app->put('/api/catalogo/{fid}/{pid}', function (Request $request, Response $response, array $args): Response {
+    $fid = $args['fid'];
+    $pid = $args['pid'];
+    $body = $request->getParsedBody();
+    
+    $user = Auth::user();
+    
+    // Se è un fornitore, può modificare solo il proprio catalogo
+    if ($user['role'] === 'fornitore') {
+        $fornitoreId = Auth::getFornitoreId();
+        if ($fid !== $fornitoreId) {
+            return jsonResponse($response, [
+                'error' => 'Accesso negato',
+                'message' => 'Puoi gestire solo il tuo catalogo'
+            ], 403);
+        }
+    }
+    
+    $pdo = Database::getConnection();
+    
+    // Verifica se esiste
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM Catalogo WHERE fid = :fid AND pid = :pid");
+    $stmt->execute(['fid' => $fid, 'pid' => $pid]);
+    if ($stmt->fetchColumn() == 0) {
+        return jsonResponse($response, [
+            'error' => 'Voce non trovata'
+        ], 404);
+    }
+    
+    $costo = floatval($body['costo'] ?? 0);
+    $quantita = intval($body['quantita'] ?? 0);
+    $note = trim($body['note'] ?? '');
+    
+    if ($costo <= 0) {
+        return jsonResponse($response, [
+            'error' => 'Parametri non validi',
+            'message' => 'Il costo deve essere maggiore di 0'
+        ], 400);
+    }
+    
+    $stmt = $pdo->prepare(
+        "UPDATE Catalogo 
+         SET costo = :costo, quantita = :quantita, note = :note
+         WHERE fid = :fid AND pid = :pid"
+    );
+    
+    $stmt->execute([
+        'fid' => $fid,
+        'pid' => $pid,
+        'costo' => $costo,
+        'quantita' => $quantita,
+        'note' => $note
+    ]);
+    
+    return jsonResponse($response, [
+        'message' => 'Voce catalogo aggiornata con successo',
+        'data' => [
+            'fid' => $fid,
+            'pid' => $pid,
+            'costo' => $costo,
+            'quantita' => $quantita,
+            'note' => $note
+        ]
+    ]);
+})->add(new AuthMiddleware());
+
+/* ---------------------------------------------------------------
+   DELETE /api/catalogo/{fid}/{pid} - Rimuovi pezzo dal catalogo
+   Admin: può rimuovere qualsiasi voce
+   Fornitore: può rimuovere solo dal proprio catalogo
+--------------------------------------------------------------- */
+$app->delete('/api/catalogo/{fid}/{pid}', function (Request $request, Response $response, array $args): Response {
+    $fid = $args['fid'];
+    $pid = $args['pid'];
+    
+    $user = Auth::user();
+    
+    // Se è un fornitore, può eliminare solo dal proprio catalogo
+    if ($user['role'] === 'fornitore') {
+        $fornitoreId = Auth::getFornitoreId();
+        if ($fid !== $fornitoreId) {
+            return jsonResponse($response, [
+                'error' => 'Accesso negato',
+                'message' => 'Puoi gestire solo il tuo catalogo'
+            ], 403);
+        }
+    }
+    
+    $pdo = Database::getConnection();
+    
+    $stmt = $pdo->prepare("DELETE FROM Catalogo WHERE fid = :fid AND pid = :pid");
+    $stmt->execute(['fid' => $fid, 'pid' => $pid]);
+    
+    if ($stmt->rowCount() == 0) {
+        return jsonResponse($response, [
+            'error' => 'Voce non trovata'
+        ], 404);
+    }
+    
+    return jsonResponse($response, [
+        'message' => 'Pezzo rimosso dal catalogo con successo'
+    ]);
+})->add(new AuthMiddleware());
 
 $homeHandler = function (Request $request, Response $response): Response {
     return jsonResponse($response, [

@@ -1,21 +1,42 @@
-# verificaasorpresa
+# FornitoriPezziDB
 
-REST API con **Slim Framework 4** sul database `FornitoriPezziDB` (tabelle `Fornitori`, `Pezzi`, `Catalogo`).
+Sistema completo di gestione **Fornitori, Pezzi e Cataloghi** con **Slim Framework 4**, autenticazione utenti e web dashboard.
+
+### ✨ Novità v2.0
+- ✅ **Sistema di Autenticazione**: Login/logout con sessioni PHP
+- ✅ **Dashboard Web**: Per amministratori e fornitori
+- ✅ **API REST Estesa**: CRUD completo per tutte le risorse
+- ✅ **Gestione Catalogo**: Fornitori possono gestire il proprio catalogo
+- ✅ **Controllo Accessi**: Ruoli differenziati (admin/fornitore)
+- ✅ **Dialog Interattivi**: Visualizzazione dettagli di ogni risorsa
+- ✅ **Paginazione**: Su tutte le liste API
 
 ---
 
-## Struttura del progetto
+## 🗂️ Struttura del progetto
 
 ```
-verificaasorpresa/
+verificadigruppo/
 ├── public/
-│   └── index.php          # entry-point Slim (10 endpoint)
+│   ├── index.php                    # entry-point Slim API
+│   ├── login.html                   # Pagina login
+│   ├── dashboard-admin.html         # Dashboard amministratori
+│   ├── dashboard-fornitore.html     # Dashboard fornitori
+│   ├── styles.css                   # Stili CSS comuni
+│   ├── dashboard-common.js          # JS comuni
+│   ├── dashboard-admin.js           # Logica dashboard admin
+│   └── dashboard-fornitore.js       # Logica dashboard fornitore
 ├── src/
-│   ├── Database.php       # singleton PDO
-│   └── Paginator.php      # paginazione query-string
+│   ├── Database.php                 # Singleton PDO
+│   ├── Paginator.php                # Paginazione
+│   ├── Auth.php                     # Autenticazione
+│   └── Middleware/
+│       ├── AuthMiddleware.php       # Verifica autenticazione
+│       └── AdminMiddleware.php      # Verifica ruolo admin
 ├── tests/
-│   └── QueryTest.php      # PHPUnit (SQLite in-memory)
-├── database.sql           # dump MySQL completo
+│   └── QueryTest.php                # PHPUnit (SQLite in-memory)
+├── database.sql                     # Schema MySQL completo
+├── IMPLEMENTAZIONE.md               # Documentazione dettagliata
 ├── composer.json
 ├── phpunit.xml
 ├── .env.example
@@ -24,29 +45,81 @@ verificaasorpresa/
 
 ---
 
-## Installazione
+## 🚀 Avvio Rapido
 
 ```bash
-git clone https://github.com/<tuo-username>/verificaasorpresa.git
-cd verificaasorpresa
-
-# dipendenze
+# Clone e setup
+git clone https://github.com/<tuo-username>/verificadigruppo.git
+cd verificadigruppo
 composer install
 
-# configura DB
+# Configura database
 cp .env.example .env
-# modifica .env con le tue credenziali MySQL
+# Modifica .env con credenziali MySQL
 
-# importa il dump
+# Importa schema
 mysql -u root -p < database.sql
 
-# avvia il server di sviluppo
-composer start        # http://localhost:8080
+# Avvia server (PHP 7.4+)
+php -S localhost:8080 -t public/
+# Oppure: composer start
+
+# Accedi
+# Login: http://localhost:8080/login.html
 ```
+
+### 🔑 Credenziali di Test
+- **Admin**: `admin` / `password123`
+- **Fornitore Acme**: `acme_user` / `password123`
+- **Fornitore Widget**: `widget_user` / `password123`
+- **Fornitore Supplies**: `supplies_user` / `password123`
 
 ---
 
-## I 10 Endpoint
+## 📚 API Endpoints
+
+### Autenticazione
+- `POST /api/auth/login` - Login utente
+- `POST /api/auth/logout` - Logout
+- `GET /api/auth/me` - Info utente corrente
+
+### Fornitori (Admin: CRUD completo, Fornitore: lettura)
+- `GET /api/fornitori` - Lista fornitori (paginata)
+- `GET /api/fornitori/{fid}` - Dettagli fornitore
+- `POST /api/fornitori` - Crea fornitore *(admin only)*
+- `PUT /api/fornitori/{fid}` - Aggiorna *(admin only)*
+- `DELETE /api/fornitori/{fid}` - Elimina *(admin only)*
+
+### Pezzi (Admin: CRUD, Fornitore: lettura)
+- `GET /api/pezzi` - Lista pezzi (paginata)
+- `GET /api/pezzi/{pid}` - Dettagli pezzo
+- `POST /api/pezzi` - Crea pezzo *(admin only)*
+- `PUT /api/pezzi/{pid}` - Aggiorna *(admin only)*
+- `DELETE /api/pezzi/{pid}` - Elimina *(admin only)*
+
+### Catalogo (Admin: CRUD, Fornitore: CRUD solo proprio)
+- `GET /api/catalogo` - Lista catalogo (admin: tutto, fornitore: suo catalogo)
+- `POST /api/catalogo` - Aggiungi pezzo al catalogo
+- `PUT /api/catalogo/{fid}/{pid}` - Aggiorna voce catalogo
+- `DELETE /api/catalogo/{fid}/{pid}` - Rimuovi dal catalogo
+
+### Query Originali (10 Endpoint)
+- `GET /1` - Pezzi distinti
+- `GET /2` - Fornitori completi
+- `GET /3` - Fornitori per colore
+- `GET /4` - Pezzi unici per fornitore
+- `GET /5` - Fornitori prezzo sopra media
+- `GET /6` - Costo minimo per pezzo
+- `GET /7` - Fornitori solo rossi
+- `GET /8` - Fornitori rossi e verdi
+- `GET /9` - Fornitori per colore
+- `GET /10` - Pezzi in N fornitori
+
+Vedi [IMPLEMENTAZIONE.md](IMPLEMENTAZIONE.md) per documentazione completa.
+
+---
+
+## I 10 Endpoint Originali
 
 Tutti rispondono in `application/json`.  
 La paginazione si attiva con `?page=N&per_page=N` (default: pagina 1, 20 righe).

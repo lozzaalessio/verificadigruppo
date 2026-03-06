@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Amministratore - FornitoriPezziDB</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>FornitoriPezziDB</h2>
+                <p class="user-role">Amministratore</p>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" data-section="fornitori">
+                    <span class="nav-icon">🏢</span>
+                    Fornitori
+                </a>
+                <a href="#" class="nav-item" data-section="pezzi">
+                    <span class="nav-icon">⚙️</span>
+                    Pezzi
+                </a>
+                <a href="#" class="nav-item" data-section="catalogo">
+                    <span class="nav-icon">📦</span>
+                    Catalogo
+                </a>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <div class="user-info">
+                    <strong id="username"></strong>
+                    <small id="email"></small>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="logoutBtn">Esci</button>
+            </div>
+        </aside>
+        
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="content-header">
+                <h1 id="sectionTitle">Gestione Fornitori</h1>
+                <button class="btn btn-primary" id="addBtn">
+                    <span>+</span> Aggiungi
+                </button>
+            </header>
+            
+            <div class="content-body">
+                <!-- Search and Filters -->
+                <div class="search-bar">
+                    <input type="text" id="searchInput" placeholder="Cerca...">
+                    <span class="search-icon">🔍</span>
+                </div>
+                
+                <!-- Data Table -->
+                <div class="table-container">
+                    <table class="data-table" id="dataTable">
+                        <thead id="tableHead"></thead>
+                        <tbody id="tableBody"></tbody>
+                    </table>
+                </div>
+                
+                <!-- Pagination -->
+                <div class="pagination" id="pagination">
+                    <button class="btn btn-sm" id="prevBtn">Precedente</button>
+                    <span id="pageInfo">Pagina 1 di 1</span>
+                    <button class="btn btn-sm" id="nextBtn">Successivo</button>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <!-- Modal per Dialog -->
+    <div class="modal" id="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Dettagli</h2>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="modalCloseBtn">Chiudi</button>
+                <button class="btn btn-primary" id="modalActionBtn" style="display:none;">Salva</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="dashboard-common.js"></script>
+    <script src="dashboard-admin.js"></script>
+</body>
+</html>
