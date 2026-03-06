@@ -2,6 +2,7 @@
 
 let fornitoreData = null;
 let pezziDisponibili = [];
+let catalogoItems = [];
 
 // Carica info fornitore
 async function loadFornitoreInfo() {
@@ -27,11 +28,11 @@ async function loadFornitoreInfo() {
 
 // Aggiorna statistiche
 function updateStats() {
-    if (!AppState.data) return;
+    if (!catalogoItems) return;
     
-    const totalPezzi = AppState.data.length;
-    const valoreTotale = AppState.data.reduce((sum, item) => sum + (item.costo * item.quantita), 0);
-    const quantitaTotale = AppState.data.reduce((sum, item) => sum + (item.quantita || 0), 0);
+    const totalPezzi = catalogoItems.length;
+    const valoreTotale = catalogoItems.reduce((sum, item) => sum + (item.costo * item.quantita), 0);
+    const quantitaTotale = catalogoItems.reduce((sum, item) => sum + (item.quantita || 0), 0);
     
     document.getElementById('totalPezzi').textContent = totalPezzi;
     document.getElementById('valoreTotale').textContent = `€ ${formatNumber(valoreTotale)}`;
@@ -40,26 +41,40 @@ function updateStats() {
 
 // Carica catalogo fornitore
 async function loadCatalogo() {
+    const query = new URLSearchParams({
+        page: String(AppState.currentPage),
+        per_page: String(AppState.perPage)
+    });
+
+    if (AppState.searchTerm.trim() !== '') {
+        query.set('search', AppState.searchTerm.trim());
+    }
+
     showLoading();
     
     try {
-        const response = await apiCall('/api/catalogo');
+        const response = await apiCall(`/api/catalogo?${query.toString()}`);
         
         if (response.data && Array.isArray(response.data)) {
             AppState.data = response.data;
+            catalogoItems = response.data;
         } else if (Array.isArray(response)) {
             AppState.data = response;
+            catalogoItems = response;
         } else {
             AppState.data = [];
+            catalogoItems = [];
         }
-        
-        // Filtra e pagina
-        const filtered = filterData(AppState.data, AppState.searchTerm);
-        const paginated = paginateData(filtered, AppState.currentPage, AppState.perPage);
+
+        const meta = response.meta || {
+            total: AppState.data.length,
+            current_page: AppState.currentPage,
+            per_page: AppState.perPage
+        };
         
         // Render
-        renderCatalogoTable(paginated);
-        updatePagination(filtered.length, AppState.currentPage, AppState.perPage);
+        renderCatalogoTable(AppState.data);
+        updatePagination(meta.total || 0, meta.current_page || 1, meta.per_page || AppState.perPage);
         updateStats();
         
     } catch (error) {
@@ -122,10 +137,19 @@ function renderCatalogoTable(data) {
 
 // Carica pezzi disponibili
 async function loadPezziDisponibili() {
+    const query = new URLSearchParams({
+        page: String(AppState.currentPage),
+        per_page: String(AppState.perPage)
+    });
+
+    if (AppState.searchTerm.trim() !== '') {
+        query.set('search', AppState.searchTerm.trim());
+    }
+
     showLoading();
     
     try {
-        const response = await apiCall('/api/pezzi');
+        const response = await apiCall(`/api/pezzi?${query.toString()}`);
         
         if (response.data && Array.isArray(response.data)) {
             pezziDisponibili = response.data;
@@ -134,14 +158,16 @@ async function loadPezziDisponibili() {
         } else {
             pezziDisponibili = [];
         }
-        
-        // Filtra e pagina
-        const filtered = filterData(pezziDisponibili, AppState.searchTerm);
-        const paginated = paginateData(filtered, AppState.currentPage, AppState.perPage);
+
+        const meta = response.meta || {
+            total: pezziDisponibili.length,
+            current_page: AppState.currentPage,
+            per_page: AppState.perPage
+        };
         
         // Render
-        renderPezziTable(paginated);
-        updatePagination(filtered.length, AppState.currentPage, AppState.perPage);
+        renderPezziTable(pezziDisponibili);
+        updatePagination(meta.total || 0, meta.current_page || 1, meta.per_page || AppState.perPage);
         
     } catch (error) {
         console.error('Errore caricamento pezzi:', error);
@@ -175,7 +201,7 @@ function renderPezziTable(data) {
     }
     
     tbody.innerHTML = data.map(item => {
-        const giaNelCatalogo = AppState.data.some(c => c.pid === item.pid);
+        const giaNelCatalogo = catalogoItems.some(c => c.pid === item.pid);
         
         return `
             <tr>
@@ -447,7 +473,7 @@ async function saveCatalogoItem(isNew, originalItem = null) {
         } else {
             // Ricarica anche il catalogo in background per aggiornare i badge
             const response = await apiCall('/api/catalogo');
-            AppState.data = response.data || response;
+            catalogoItems = response.data || response;
             loadPezziDisponibili();
         }
         
@@ -474,6 +500,15 @@ async function deleteCatalogoItem(pid) {
     } catch (error) {
         showAlert(error.message, 'error');
     }
+}
+
+// Loader unico per eventi comuni (search/paginazione)
+function loadCurrentSection() {
+    if (AppState.currentSection === 'catalogo') {
+        return loadCatalogo();
+    }
+
+    return loadPezziDisponibili();
 }
 
 // Cambia sezione

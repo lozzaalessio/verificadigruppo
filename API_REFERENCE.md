@@ -76,7 +76,7 @@ GET /api/auth/me
 
 ### List Suppliers (Paginated)
 ```
-GET /api/fornitori?page=1&per_page=20
+GET /api/fornitori?page=1&per_page=20&search=acme
 ```
 
 **Response (200):**
@@ -95,10 +95,11 @@ GET /api/fornitori?page=1&per_page=20
       "updated_at": "2026-03-02 10:30:45"
     }
   ],
-  "pagination": {
-    "page": 1,
+  "meta": {
+    "total": 7,
     "per_page": 20,
-    "total": 7
+    "current_page": 1,
+    "last_page": 1
   }
 }
 ```
@@ -143,6 +144,12 @@ Content-Type: application/x-www-form-urlencoded
 fid=F08&fnome=NuovoFornitore&indirizzo=Via Torino 5&user_id=5
 ```
 
+You can also create and associate a new supplier user in one request:
+
+```
+fid=F08&fnome=NuovoFornitore&register_user=true&username=f08_user&email=f08@example.com&password=password123
+```
+
 **Response (201):**
 ```json
 {
@@ -175,7 +182,7 @@ DELETE /api/fornitori/{fid}
 
 ### List Parts (Paginated)
 ```
-GET /api/pezzi?page=1&per_page=20
+GET /api/pezzi?page=1&per_page=20&search=rosso
 ```
 
 **Response (200):**
@@ -195,10 +202,11 @@ GET /api/pezzi?page=1&per_page=20
       "updated_at": "2026-03-02 10:30:45"
     }
   ],
-  "pagination": {
-    "page": 1,
+  "meta": {
+    "total": 12,
     "per_page": 20,
-    "total": 12
+    "current_page": 1,
+    "last_page": 1
   }
 }
 ```
@@ -259,7 +267,7 @@ DELETE /api/pezzi/{pid}
 
 ### List Catalog
 ```
-GET /api/catalogo?page=1&per_page=20
+GET /api/catalogo?page=1&per_page=20&search=bullone
 ```
 
 **For Admin:** Shows complete catalog
@@ -284,12 +292,18 @@ GET /api/catalogo?page=1&per_page=20
       "updated_at": "2026-03-02 10:30:45"
     }
   ],
-  "pagination": {
-    "page": 1,
+  "meta": {
+    "total": 45,
     "per_page": 20,
-    "total": 45
+    "current_page": 1,
+    "last_page": 3
   }
 }
+```
+
+### Get Catalog Entry Details
+```
+GET /api/catalogo/{fid}/{pid}
 ```
 
 ### Add Part to Catalog
@@ -483,10 +497,11 @@ All paginated endpoints support:
 Response includes:
 ```json
 {
-  "pagination": {
-    "page": 1,
+  "meta": {
+    "total": 100,
     "per_page": 20,
-    "total": 100
+    "current_page": 1,
+    "last_page": 5
   }
 }
 ```

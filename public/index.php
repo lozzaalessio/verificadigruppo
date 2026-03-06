@@ -96,7 +96,7 @@ $app->get('/2', function (Request $request, Response $response): Response {
          ORDER BY f.fid"
     )->fetchAll();
 
-    return jsonResponse($response, ['data' => $rows]);
+    return jsonResponse($response, Paginator::paginate($rows, $request));
 });
 
 /* ===============================================================
@@ -124,10 +124,10 @@ $app->get('/3', function (Request $request, Response $response): Response {
     $stmt->execute([':colore' => $colore, ':colore2' => $colore]);
     $rows = $stmt->fetchAll();
 
-    return jsonResponse($response, [
-        'filtro' => ['colore' => $colore],
-        'data'   => $rows,
-    ]);
+    return jsonResponse($response, array_merge(
+        ['filtro' => ['colore' => $colore]],
+        Paginator::paginate($rows, $request)
+    ));
 });
 
 /* ===============================================================
@@ -165,10 +165,10 @@ $app->get('/4', function (Request $request, Response $response): Response {
     ]);
     $rows = $stmt->fetchAll();
 
-    return jsonResponse($response, [
-        'filtro' => ['fnome' => $fnome],
-        'data'   => $rows,
-    ]);
+    return jsonResponse($response, array_merge(
+        ['filtro' => ['fnome' => $fnome]],
+        Paginator::paginate($rows, $request)
+    ));
 });
 
 /* ===============================================================
@@ -248,7 +248,7 @@ $app->get('/7', function (Request $request, Response $response): Response {
          ORDER BY f.fid"
     )->fetchAll();
 
-    return jsonResponse($response, ['data' => $rows]);
+    return jsonResponse($response, Paginator::paginate($rows, $request));
 });
 
 /* ===============================================================
@@ -431,19 +431,35 @@ $app->get('/api/auth/me', function (Request $request, Response $response): Respo
 --------------------------------------------------------------- */
 $app->get('/api/fornitori', function (Request $request, Response $response): Response {
     $pdo = Database::getConnection();
+    $params = $request->getQueryParams();
+    $search = trim((string)($params['search'] ?? ''));
     
-    $stmt = $pdo->query(
-        "SELECT f.fid, f.fnome, f.indirizzo, f.user_id,
-                u.username, u.email,
-                COUNT(c.pid) as num_pezzi,
-                f.created_at, f.updated_at
-         FROM Fornitori f
-         LEFT JOIN Users u ON f.user_id = u.id
-         LEFT JOIN Catalogo c ON c.fid = f.fid
-         GROUP BY f.fid, f.fnome, f.indirizzo, f.user_id, 
-                  u.username, u.email, f.created_at, f.updated_at
-         ORDER BY f.fnome"
-    );
+    $sql = "SELECT f.fid, f.fnome, f.indirizzo, f.user_id,
+                   u.username, u.email,
+                   COUNT(c.pid) as num_pezzi,
+                   f.created_at, f.updated_at
+            FROM Fornitori f
+            LEFT JOIN Users u ON f.user_id = u.id
+            LEFT JOIN Catalogo c ON c.fid = f.fid";
+
+    $bind = [];
+    if ($search !== '') {
+        $sql .= " WHERE (
+                    f.fid LIKE :search
+                    OR f.fnome LIKE :search
+                    OR COALESCE(f.indirizzo, '') LIKE :search
+                    OR COALESCE(u.username, '') LIKE :search
+                    OR COALESCE(u.email, '') LIKE :search
+                 )";
+        $bind['search'] = '%' . $search . '%';
+    }
+
+    $sql .= " GROUP BY f.fid, f.fnome, f.indirizzo, f.user_id,
+                      u.username, u.email, f.created_at, f.updated_at
+              ORDER BY f.fnome";
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($bind);
     $rows = $stmt->fetchAll();
     
     return jsonResponse($response, Paginator::paginate($rows, $request));
@@ -484,7 +500,10 @@ $app->get('/api/fornitori/{fid}', function (Request $request, Response $response
          ORDER BY p.pnome"
     );
     $stmt->execute(['fid' => $fid]);
-    $fornitore['catalogo'] = $stmt->fetchAll();
+    $catalogoRows = $stmt->fetchAll();
+    $catalogoPaginato = Paginator::paginate($catalogoRows, $request);
+    $fornitore['catalogo'] = $catalogoPaginato['data'];
+    $fornitore['catalogo_meta'] = $catalogoPaginato['meta'];
     
     return jsonResponse($response, ['data' => $fornitore]);
 })->add(new AuthMiddleware());
@@ -498,6 +517,10 @@ $app->post('/api/fornitori', function (Request $request, Response $response): Re
     $fnome = trim($body['fnome'] ?? '');
     $indirizzo = trim($body['indirizzo'] ?? '');
     $userId = !empty($body['user_id']) ? (int)$body['user_id'] : null;
+    $registerUser = filter_var($body['register_user'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    $username = trim($body['username'] ?? '');
+    $email = trim($body['email'] ?? '');
+    $password = trim($body['password'] ?? '');
     
     if (empty($fid) || empty($fnome)) {
         return jsonResponse($response, [
@@ -507,6 +530,40 @@ $app->post('/api/fornitori', function (Request $request, Response $response): Re
     }
     
     $pdo = Database::getConnection();
+
+    if ($registerUser && $userId !== null) {
+        return jsonResponse($response, [
+            'error' => 'Parametri non validi',
+            'message' => 'Specifica user_id oppure register_user, non entrambi'
+        ], 400);
+    }
+
+    if ($registerUser) {
+        if ($username === '' || $email === '' || $password === '') {
+            return jsonResponse($response, [
+                'error' => 'Parametri mancanti',
+                'message' => 'Per register_user servono username, email e password'
+            ], 400);
+        }
+
+        $newUserId = Auth::register($username, $password, $email, 'fornitore');
+        if ($newUserId === null) {
+            return jsonResponse($response, [
+                'error' => 'Utente non creato',
+                'message' => 'Username o email gia in uso'
+            ], 409);
+        }
+        $userId = $newUserId;
+    } elseif ($userId !== null) {
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM Users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+        if ((int)$stmt->fetchColumn() === 0) {
+            return jsonResponse($response, [
+                'error' => 'Utente non trovato',
+                'message' => 'L\'utente associato non esiste'
+            ], 404);
+        }
+    }
     
     // Verifica se esiste già
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM Fornitori WHERE fid = :fid");
@@ -516,6 +573,17 @@ $app->post('/api/fornitori', function (Request $request, Response $response): Re
             'error' => 'Fornitore già esistente',
             'message' => "Un fornitore con ID '{$fid}' esiste già"
         ], 409);
+    }
+
+    if ($userId !== null) {
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM Fornitori WHERE user_id = :user_id');
+        $stmt->execute(['user_id' => $userId]);
+        if ((int)$stmt->fetchColumn() > 0) {
+            return jsonResponse($response, [
+                'error' => 'Utente gia associato',
+                'message' => 'Questo utente e gia collegato a un altro fornitore'
+            ], 409);
+        }
     }
     
     $stmt = $pdo->prepare(
@@ -561,12 +629,65 @@ $app->put('/api/fornitori/{fid}', function (Request $request, Response $response
     $fnome = trim($body['fnome'] ?? '');
     $indirizzo = trim($body['indirizzo'] ?? '');
     $userId = isset($body['user_id']) ? (empty($body['user_id']) ? null : (int)$body['user_id']) : null;
+    $registerUser = filter_var($body['register_user'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    $username = trim($body['username'] ?? '');
+    $email = trim($body['email'] ?? '');
+    $password = trim($body['password'] ?? '');
     
     if (empty($fnome)) {
         return jsonResponse($response, [
             'error' => 'Parametri mancanti',
             'message' => 'fnome è obbligatorio'
         ], 400);
+    }
+
+    if ($registerUser && $userId !== null) {
+        return jsonResponse($response, [
+            'error' => 'Parametri non validi',
+            'message' => 'Specifica user_id oppure register_user, non entrambi'
+        ], 400);
+    }
+
+    if ($registerUser) {
+        if ($username === '' || $email === '' || $password === '') {
+            return jsonResponse($response, [
+                'error' => 'Parametri mancanti',
+                'message' => 'Per register_user servono username, email e password'
+            ], 400);
+        }
+
+        $newUserId = Auth::register($username, $password, $email, 'fornitore');
+        if ($newUserId === null) {
+            return jsonResponse($response, [
+                'error' => 'Utente non creato',
+                'message' => 'Username o email gia in uso'
+            ], 409);
+        }
+        $userId = $newUserId;
+    } elseif ($userId !== null) {
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM Users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+        if ((int)$stmt->fetchColumn() === 0) {
+            return jsonResponse($response, [
+                'error' => 'Utente non trovato',
+                'message' => 'L\'utente associato non esiste'
+            ], 404);
+        }
+    }
+
+    if ($userId !== null) {
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM Fornitori WHERE user_id = :user_id AND fid <> :fid');
+        $stmt->execute([
+            'user_id' => $userId,
+            'fid' => $fid,
+        ]);
+
+        if ((int)$stmt->fetchColumn() > 0) {
+            return jsonResponse($response, [
+                'error' => 'Utente gia associato',
+                'message' => 'Questo utente e gia collegato a un altro fornitore'
+            ], 409);
+        }
     }
     
     $stmt = $pdo->prepare(
@@ -623,20 +744,35 @@ $app->delete('/api/fornitori/{fid}', function (Request $request, Response $respo
 --------------------------------------------------------------- */
 $app->get('/api/pezzi', function (Request $request, Response $response): Response {
     $pdo = Database::getConnection();
+    $params = $request->getQueryParams();
+    $search = trim((string)($params['search'] ?? ''));
     
-    $stmt = $pdo->query(
-        "SELECT p.pid, p.pnome, p.colore, p.descrizione,
-                COUNT(DISTINCT c.fid) as num_fornitori,
-                MIN(c.costo) as costo_minimo,
-                MAX(c.costo) as costo_massimo,
-                AVG(c.costo) as costo_medio,
-                p.created_at, p.updated_at
-         FROM Pezzi p
-         LEFT JOIN Catalogo c ON c.pid = p.pid
-         GROUP BY p.pid, p.pnome, p.colore, p.descrizione, 
-                  p.created_at, p.updated_at
-         ORDER BY p.pnome"
-    );
+    $sql = "SELECT p.pid, p.pnome, p.colore, p.descrizione,
+                   COUNT(DISTINCT c.fid) as num_fornitori,
+                   MIN(c.costo) as costo_minimo,
+                   MAX(c.costo) as costo_massimo,
+                   AVG(c.costo) as costo_medio,
+                   p.created_at, p.updated_at
+            FROM Pezzi p
+            LEFT JOIN Catalogo c ON c.pid = p.pid";
+
+    $bind = [];
+    if ($search !== '') {
+        $sql .= " WHERE (
+                    p.pid LIKE :search
+                    OR p.pnome LIKE :search
+                    OR p.colore LIKE :search
+                    OR COALESCE(p.descrizione, '') LIKE :search
+                 )";
+        $bind['search'] = '%' . $search . '%';
+    }
+
+    $sql .= " GROUP BY p.pid, p.pnome, p.colore, p.descrizione,
+                     p.created_at, p.updated_at
+              ORDER BY p.pnome";
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($bind);
     $rows = $stmt->fetchAll();
     
     return jsonResponse($response, Paginator::paginate($rows, $request));
@@ -675,7 +811,10 @@ $app->get('/api/pezzi/{pid}', function (Request $request, Response $response, ar
          ORDER BY c.costo"
     );
     $stmt->execute(['pid' => $pid]);
-    $pezzo['fornitori'] = $stmt->fetchAll();
+    $fornitoriRows = $stmt->fetchAll();
+    $fornitoriPaginati = Paginator::paginate($fornitoriRows, $request);
+    $pezzo['fornitori'] = $fornitoriPaginati['data'];
+    $pezzo['fornitori_meta'] = $fornitoriPaginati['meta'];
     
     return jsonResponse($response, ['data' => $pezzo]);
 })->add(new AuthMiddleware());
@@ -815,6 +954,8 @@ $app->delete('/api/pezzi/{pid}', function (Request $request, Response $response,
 $app->get('/api/catalogo', function (Request $request, Response $response): Response {
     $pdo = Database::getConnection();
     $user = Auth::user();
+    $params = $request->getQueryParams();
+    $search = trim((string)($params['search'] ?? ''));
     
     // Se è un fornitore, mostra solo il suo catalogo
     if ($user['role'] === 'fornitore') {
@@ -826,7 +967,7 @@ $app->get('/api/catalogo', function (Request $request, Response $response): Resp
             ], 404);
         }
         
-        $stmt = $pdo->prepare(
+        $sql =
             "SELECT c.fid, c.pid, c.costo, c.quantita, c.note,
                     f.fnome, f.indirizzo,
                     p.pnome, p.colore, p.descrizione,
@@ -834,13 +975,25 @@ $app->get('/api/catalogo', function (Request $request, Response $response): Resp
              FROM Catalogo c
              JOIN Fornitori f ON f.fid = c.fid
              JOIN Pezzi p ON p.pid = c.pid
-             WHERE c.fid = :fid
-             ORDER BY p.pnome"
-        );
-        $stmt->execute(['fid' => $fornitoreId]);
+             WHERE c.fid = :fid";
+
+        $bind = ['fid' => $fornitoreId];
+        if ($search !== '') {
+            $sql .= " AND (
+                        c.pid LIKE :search
+                        OR p.pnome LIKE :search
+                        OR p.colore LIKE :search
+                        OR COALESCE(c.note, '') LIKE :search
+                     )";
+            $bind['search'] = '%' . $search . '%';
+        }
+
+        $sql .= ' ORDER BY p.pnome';
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($bind);
     } else {
         // Admin: mostra tutto
-        $stmt = $pdo->query(
+        $sql =
             "SELECT c.fid, c.pid, c.costo, c.quantita, c.note,
                     f.fnome, f.indirizzo,
                     p.pnome, p.colore, p.descrizione,
@@ -848,13 +1001,72 @@ $app->get('/api/catalogo', function (Request $request, Response $response): Resp
              FROM Catalogo c
              JOIN Fornitori f ON f.fid = c.fid
              JOIN Pezzi p ON p.pid = c.pid
-             ORDER BY f.fnome, p.pnome"
-        );
+             WHERE 1=1";
+
+        $bind = [];
+        if ($search !== '') {
+            $sql .= " AND (
+                        c.fid LIKE :search
+                        OR f.fnome LIKE :search
+                        OR c.pid LIKE :search
+                        OR p.pnome LIKE :search
+                        OR p.colore LIKE :search
+                        OR COALESCE(c.note, '') LIKE :search
+                     )";
+            $bind['search'] = '%' . $search . '%';
+        }
+
+        $sql .= ' ORDER BY f.fnome, p.pnome';
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($bind);
     }
     
     $rows = $stmt->fetchAll();
     
     return jsonResponse($response, Paginator::paginate($rows, $request));
+})->add(new AuthMiddleware());
+
+/* ---------------------------------------------------------------
+   GET /api/catalogo/{fid}/{pid} - Dettaglio voce catalogo
+   Admin: qualsiasi voce
+   Fornitore: solo voce del proprio catalogo
+--------------------------------------------------------------- */
+$app->get('/api/catalogo/{fid}/{pid}', function (Request $request, Response $response, array $args): Response {
+    $fid = $args['fid'];
+    $pid = $args['pid'];
+    $user = Auth::user();
+
+    if ($user['role'] === 'fornitore') {
+        $fornitoreId = Auth::getFornitoreId();
+        if ($fid !== $fornitoreId) {
+            return jsonResponse($response, [
+                'error' => 'Accesso negato',
+                'message' => 'Puoi visualizzare solo il tuo catalogo'
+            ], 403);
+        }
+    }
+
+    $pdo = Database::getConnection();
+    $stmt = $pdo->prepare(
+        "SELECT c.fid, c.pid, c.costo, c.quantita, c.note,
+                f.fnome, f.indirizzo,
+                p.pnome, p.colore, p.descrizione,
+                c.created_at, c.updated_at
+         FROM Catalogo c
+         JOIN Fornitori f ON f.fid = c.fid
+         JOIN Pezzi p ON p.pid = c.pid
+         WHERE c.fid = :fid AND c.pid = :pid"
+    );
+    $stmt->execute(['fid' => $fid, 'pid' => $pid]);
+    $item = $stmt->fetch();
+
+    if (!$item) {
+        return jsonResponse($response, [
+            'error' => 'Voce non trovata'
+        ], 404);
+    }
+
+    return jsonResponse($response, ['data' => $item]);
 })->add(new AuthMiddleware());
 
 /* ---------------------------------------------------------------

@@ -17,7 +17,20 @@ const SECTIONS = {
             { name: 'fid', label: 'ID Fornitore', type: 'text', required: true },
             { name: 'fnome', label: 'Nome', type: 'text', required: true },
             { name: 'indirizzo', label: 'Indirizzo', type: 'text' },
-            { name: 'user_id', label: 'ID Utente (opzionale)', type: 'number', min: 1 }
+            { name: 'user_id', label: 'ID Utente esistente (opzionale)', type: 'number', min: 1 },
+            {
+                name: 'register_user',
+                label: 'Registra nuovo utente fornitore',
+                type: 'select',
+                options: [
+                    { value: 'false', label: 'No' },
+                    { value: 'true', label: 'Si' }
+                ],
+                default: 'false'
+            },
+            { name: 'username', label: 'Username nuovo utente', type: 'text' },
+            { name: 'email', label: 'Email nuovo utente', type: 'email' },
+            { name: 'password', label: 'Password nuovo utente', type: 'password' }
         ]
     },
     pezzi: {
@@ -62,11 +75,19 @@ const SECTIONS = {
 // Carica sezione corrente
 async function loadCurrentSection() {
     const section = SECTIONS[AppState.currentSection];
+    const query = new URLSearchParams({
+        page: String(AppState.currentPage),
+        per_page: String(AppState.perPage)
+    });
+
+    if (AppState.searchTerm.trim() !== '') {
+        query.set('search', AppState.searchTerm.trim());
+    }
     
     showLoading();
     
     try {
-        const data = await apiCall(section.endpoint);
+        const data = await apiCall(`${section.endpoint}?${query.toString()}`);
         
         // Store data
         if (data.data && Array.isArray(data.data)) {
@@ -76,14 +97,16 @@ async function loadCurrentSection() {
         } else {
             AppState.data = [];
         }
-        
-        // Filtra e pagina
-        const filtered = filterData(AppState.data, AppState.searchTerm);
-        const paginated = paginateData(filtered, AppState.currentPage, AppState.perPage);
+
+        const meta = data.meta || {
+            total: AppState.data.length,
+            current_page: AppState.currentPage,
+            per_page: AppState.perPage
+        };
         
         // Render
-        renderTable(section.columns, paginated);
-        updatePagination(filtered.length, AppState.currentPage, AppState.perPage);
+        renderTable(section.columns, AppState.data);
+        updatePagination(meta.total || 0, meta.current_page || 1, meta.per_page || AppState.perPage);
         
     } catch (error) {
         console.error('Errore caricamento:', error);
@@ -132,10 +155,12 @@ function renderTable(columns, data) {
 // Render azioni
 function renderActions(item) {
     const section = AppState.currentSection;
+    const itemId = item.fid || item.pid || item.id;
+    const secondId = section === 'catalogo' ? item.pid : '';
     
     return `
         <div class="action-buttons">
-            <button class="btn btn-sm btn-secondary" onclick="viewDetails('${section}', '${item.fid || item.pid || item.id}')">
+            <button class="btn btn-sm btn-secondary" onclick="viewDetails('${section}', '${itemId}', '${secondId}')">
                 👁️
             </button>
             <button class="btn btn-sm btn-primary" onclick="editItem('${section}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">
@@ -158,12 +183,10 @@ async function viewDetails(section, id, secondId = null) {
     try {
         let endpoint = SECTIONS[section].endpoint;
         
-        if (section === 'catalogo' && secondId) {
-            // Per catalogo non abbiamo dettagli singoli, mostra i dati dalla tabella
-            const item = AppState.data.find(d => d.fid === id && d.pid === secondId);
-            if (item) {
-                renderCatalogoDetails(item);
-            }
+        if (section === 'catalogo') {
+            endpoint += `/${id}/${secondId}`;
+            const response = await apiCall(endpoint);
+            renderCatalogoDetails(response.data || response);
         } else {
             endpoint += `/${id}`;
             const response = await apiCall(endpoint);

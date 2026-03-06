@@ -8,7 +8,9 @@ const AppState = {
     currentPage: 1,
     perPage: 20,
     searchTerm: '',
-    data: []
+    data: [],
+    totalItems: 0,
+    lastPage: 1
 };
 
 // Verifica autenticazione
@@ -175,6 +177,8 @@ function paginateData(data, page, perPage) {
 // Aggiorna info paginazione
 function updatePagination(totalItems, currentPage, perPage) {
     const totalPages = Math.ceil(totalItems / perPage);
+    AppState.totalItems = totalItems;
+    AppState.lastPage = Math.max(1, totalPages);
     
     document.getElementById('pageInfo').textContent = 
         `Pagina ${currentPage} di ${totalPages} (${totalItems} elementi)`;
@@ -252,7 +256,9 @@ function initCommonEvents() {
             searchTimeout = setTimeout(() => {
                 AppState.searchTerm = e.target.value;
                 AppState.currentPage = 1;
-                loadCurrentSection();
+                if (typeof loadCurrentSection === 'function') {
+                    loadCurrentSection();
+                }
             }, 300);
         });
     }
@@ -265,17 +271,20 @@ function initCommonEvents() {
         prevBtn.addEventListener('click', () => {
             if (AppState.currentPage > 1) {
                 AppState.currentPage--;
-                loadCurrentSection();
+                if (typeof loadCurrentSection === 'function') {
+                    loadCurrentSection();
+                }
             }
         });
     }
     
     if (nextBtn) {
         nextBtn.addEventListener('click', () => {
-            const totalPages = Math.ceil(AppState.data.length / AppState.perPage);
-            if (AppState.currentPage < totalPages) {
+            if (AppState.currentPage < AppState.lastPage) {
                 AppState.currentPage++;
-                loadCurrentSection();
+                if (typeof loadCurrentSection === 'function') {
+                    loadCurrentSection();
+                }
             }
         });
     }
