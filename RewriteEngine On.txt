@@ -1,0 +1,4 @@
+RewriteEngine On
+RewriteBase /cartella/
+RewriteRule ^(.*)$ index.php
+[L,QSA]

@@ -23,8 +23,13 @@ class Database
             $host   = $_ENV['DB_HOST'] ?? 'localhost';
             $port   = $_ENV['DB_PORT'] ?? '3306';
             $dbname = $_ENV['DB_NAME'] ?? 'FornitoriPezziDB';
+<<<<<<< HEAD
             $user   = $_ENV['DB_USER'] ?? 'root';
             $pass   = $_ENV['DB_PASS'] ?? '';
+=======
+            $user   = $_ENV['DB_USER'] ?? 'utente1';
+            $pass   = $_ENV['DB_PASS'] ?? 'password123';
+>>>>>>> 13b6648 (finale)
 
             try {
                 self::$instance = new PDO(
